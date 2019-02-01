@@ -3,7 +3,9 @@ title: "01 Explore temperature data in rivers"
 output: html_document
 ---
 
-# Get the number of temperature 
+# Get stations (STATION_ID) with temperature measurements
+
+Note to self (DHJ): Some code is from '14_extract_stationyears_with_species_extrastations.R'  
 
 ```{r}
 library(dplyr)
@@ -149,11 +151,108 @@ result_list <- qry_list %>% map(get_nivabase_data)
 
 # Combine the 5 results in the list into a single result
 result <- result_list %>% bind_rows()
-nrow(result)
+nrow(result) # 544
 ```
 
 ## 3. Save result
 ```{r}
-openxlsx::write.xlsx(result, "Count of temperature stations in rivers.xlsx")
+openxlsx::write.xlsx(result, "Temperature stations in rivers (no metadata).xlsx")
 ```
+
+## 4. Add metadata  
+
+
+### a. Add coordinates   
+From GEOM_REF_ID in station table
+```{r}
+df_station_geom <- get_nivabase_selection(
+  "STATION_ID, GEOM_REF_ID",
+  "STATIONS",
+  "STATION_ID",
+  result$STATION_ID)
+
+result_meta <- result %>% left_join(df_station_geom)
+nrow(result)
+
+df_sample_points <- get_nivabase_selection(
+  "LONGITUDE, LATITUDE, SAMPLE_POINT_ID",
+  "SAMPLE_POINTS",
+  "SAMPLE_POINT_ID",
+   result_meta$GEOM_REF_ID)
+
+result_meta <- result_meta %>% 
+  left_join(df_sample_points, by = c("GEOM_REF_ID" = "SAMPLE_POINT_ID"))
+nrow(result_meta)
+```
+
+### b. Check stations lacking coordinates
+```{r}
+result_lacking_position <- result_meta %>% 
+  filter(is.na(LONGITUDE))
+
+# Check water samples table
+# First check number of samples
+get_nivabase_selection(
+  "count(*)",
+  "WATER_SAMPLES",
+  "STATION_ID",
+  result_lacking_position$STATION_ID)
+
+# Then get data
+result_lacking_position_samples <- get_nivabase_selection(
+  "WATER_SAMPLE_ID,STATION_ID,SAMPLE_DATE,DEPTH1,DEPTH2,SAMPLE_POINT_ID",
+  "WATER_SAMPLES",
+  "STATION_ID",
+  result_lacking_position$STATION_ID)
+nrow(df_sample_points)
+
+# No geographic position here either
+sum(!is.na(result_lacking_position$SAMPLE_POINT_ID))
+```
+
+### c. Get station and project names
+```{r}
+df_projects_stations <- get_nivabase_selection(
+  "PROJECT_ID, STATION_ID, STATION_CODE, STATION_NAME",
+  "PROJECTS_STATIONS",
+  "STATION_ID",
+  result$STATION_ID)
+
+df_projects <- get_nivabase_selection(
+  "PROJECT_ID, PROJECT_NAME",
+  "PROJECTS",
+  "PROJECT_ID",
+  df_projects_stations$PROJECT_ID)
+
+nrow(df_projects_stations)
+df_projects_stations <- df_projects_stations %>% left_join(df_projects)
+nrow(df_projects_stations)
+
+df_projects_summ <- df_projects_stations %>%
+  select(-PROJECT_ID) %>%
+  group_by(STATION_ID) %>%
+  summarize_all(paste, collapse = ";")
+
+```
+
+### d. Add station and project names to data
+```{r}
+nrow(result_meta)
+result_meta <- result_meta %>%
+  left_join(df_projects_summ)
+nrow(result_meta)
+
+```
+
+### e. Fix coordinates
+```{r}
+result_meta$LONGITUDE <- as.numeric(sub(",", ".", result_meta$LONGITUDE, fixed = TRUE))
+result_meta$LATITUDE <- as.numeric(sub(",", ".", result_meta$LATITUDE, fixed = TRUE))
+```
+
+## 5. Save result with metadata
+```{r}
+openxlsx::write.xlsx(result_meta, "Temperature stations in rivers.xlsx")
+```
+
 
